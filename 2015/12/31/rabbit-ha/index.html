@@ -1,0 +1,63 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta http-equiv="content-type" content="text/html; charset=utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/><meta content="telephone=no" name="format-detection"/><meta name="description" content="Forest Zeng's Blog"/><title>RabbitMQ HA | 宝石乡人</title><link rel="stylesheet" type="text/css" href="/css/normalize.css"/><link rel="stylesheet" type="text/css" href="/css/pure-min.css"/><link rel="stylesheet" type="text/css" href="/css/grids-responsive-min.css"/><link rel="stylesheet" type="text/css" href="/css/style.css"/><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"/><link rel="apple-touch-icon" href="/apple-touch-icon.png"/><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"/><link rel="alternate" type="application/atom+xml" href="/atom.xml"/></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">RabbitMQ HA</h1><a id="logo" href="/">宝石乡人</a><p class="description">宝石乡人的博客</p></div><div id="nav-menu"><a href="/" class="current"><i class="icon-home"> 首页</i></a><a href="/archives/"><i class="icon-archive"> 归档</i></a><a href="/about/"><i class="icon-about"> 关于</i></a><a href="/atom.xml"><i class="icon-rss"> 订阅</i></a></div></div><div id="layout" class="pure-g"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post post-page"><h1 class="post-title">RabbitMQ HA</h1><div class="post-meta">2015年12月31日 | <span class="categories">分类于<a href="/categories/RabbitMQ/"> RabbitMQ</a></span></div><div class="clear"><div id="toc" class="toc-article"><div class="toc-title">文章目录</div><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#配置镜像"><span class="toc-number">1.</span> <span class="toc-text">配置镜像</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#nodes策略与master转移"><span class="toc-number">1.1.</span> <span class="toc-text">nodes策略与master转移</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#独占队列（Exclusive_Queue）"><span class="toc-number">1.2.</span> <span class="toc-text">独占队列（Exclusive Queue）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#加入集群"><span class="toc-number">2.</span> <span class="toc-text">加入集群</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#选择合适的Synchronisation_Batch_Size"><span class="toc-number">2.1.</span> <span class="toc-text">选择合适的Synchronisation Batch Size</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#关闭节点"><span class="toc-number">2.2.</span> <span class="toc-text">关闭节点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#关闭master节点（slave未同步）"><span class="toc-number">2.3.</span> <span class="toc-text">关闭master节点（slave未同步）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#丢失master（slave都已关闭）"><span class="toc-number">2.4.</span> <span class="toc-text">丢失master（slave都已关闭）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#镜像队列的实现及含义"><span class="toc-number">3.</span> <span class="toc-text">镜像队列的实现及含义</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#发布者确认和事务"><span class="toc-number">3.1.</span> <span class="toc-text">发布者确认和事务</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#流程控制"><span class="toc-number">3.2.</span> <span class="toc-text">流程控制</span></a></li></ol></li></ol></div></div><div class="post-content"><p>RabbitMQ集群中的队列默认地保存在单个节点（首次被申明的节点）上。这与Exchange和Bind正好相反，Exchange和Bind可以被认为存在与集群中的所有节点上。队列可以被选择性地在多个节点上进行镜像。每个镜像队列由一个master和一到多个slave组成，当旧的master消失后，最老的slave会被提升为新的master。</p>
+<p>发布到队列中的消息会被复制到所有的slave节点。不管消息消费者与那个slave相连，最终都会与master连接；消息发布者发布消息到某个slave节点，都是由master进行确认。因此镜像队列加强了可用性，但是并没有让多节点分担负载（所有参与的节点都要做所有事情）。</p>
+<p>由于镜像队列需要在集群的环境中使用，因此也不推荐在WAN的网络环境中使用。</p>
+<h2 id="配置镜像">配置镜像</h2><p>队列镜像是通过<code>policy</code>来启用。策略可以随时被改动；RabbitMQ运行创建一个非镜像队列，然后再将其配置为镜像队列（反之亦然）。不能将非镜像队列与单镜像队列混为一谈，非镜像队列不需要镜像的基础环境，因此速度上比单镜像队列更快。</p>
+<p>让一个队列镜像化需要进行策略配置，包括<code>ha-mode</code>和<code>ha-params</code>，如下表：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">策略模式</th>
+<th style="text-align:left">策略参数</th>
+<th>策略描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">all</td>
+<td style="text-align:left">无</td>
+<td>队列会在集群中的所有节点创建镜像。当有新节点加入集群时，对别会在新节点创建镜像。</td>
+</tr>
+<tr>
+<td style="text-align:right">exactly</td>
+<td style="text-align:left">数量</td>
+<td>对别会在集群中创建指定数量的镜像。当集群中节点数小于镜像数量时，会在集群中的所有节点创建镜像；当集群中节点数大于镜像数量时，某个保护此镜像队列的节点关闭时，会在其他不保护此镜像的节点上创建一个新的镜像。由于队列可以称为master并在关闭时处于不同步状态，因此在<em><em>“ha-promote-on-shutdown: always”</em></em>的情况下使用此策略是非常危险的。</td>
+</tr>
+<tr>
+<td style="text-align:right">nodes</td>
+<td style="text-align:left">节点名称列表</td>
+<td>对别会被镜像到节点名称列表中的所有节点。当列表中任意数量的节点在线时不会有问题；但是如果无列表中的节点在线时，该队列会创建在客户端直接连接的节点上，不会达到预期效果。</td>
+</tr>
+</tbody>
+</table>
+<p>当HA策略变化时，RabbitMQ会尽力保证已经存在的镜像满足新的策略。</p>
+<h3 id="nodes策略与master转移">nodes策略与master转移</h3><p>由于节点设置或修改<code>nodes</code>策略会导致不在节点列表中的master节点节点消失，为了不让消息丢失，RabbitMQ会保持该master在线直到至少一个slave节点完全同步（不管多久）。但是，在同步过程中就像该节点下线了一样：消息消费者会断开与master的连接。</p>
+<p>例如：如果队列在[A,B]（A为master）节点上，如果<code>nodes</code>策略的结果导致队列在[C,D]节点，则初始的情况会是队列在[A,C,D]3个节点，直到C活着D完成与A的同步镜像后，A才会让出master。</p>
+<h3 id="独占队列（Exclusive_Queue）">独占队列（Exclusive Queue）</h3><p>当申明独占队列的连接断开后，此独占队列会自动删除。独占队列的镜像是不必要的，也不必持久化（durable）。因此，就算一个独占队列满足某个镜像策略，也不会在其他节点进行镜像。</p>
+<h2 id="加入集群">加入集群</h2><p>节点可以随时加入某个集群。当一个新的节点加入集群时，取决于队列的配置，某些队列可能会在新节点创建slave。此类slave会接受到消息发布者发布的消息，随着时间的推移会精确地将消息放到镜像队列的尾部。当消息会从镜像队列中流出，新slave的队列大小会不断缩减直到大小与master一致。此时，新slave才被认为与master完全同步。</p>
+<p>因此，新加入的slave不能为加入前的消息提供额外的冗余或可用性，直到其与master完全同步。由于在同步过程中，该队列不会对外界进行响应，因此，更可取的方式是让正在被消费的消息队列自然地同步，显式地同步非活跃队列。</p>
+<h3 id="选择合适的Synchronisation_Batch_Size">选择合适的Synchronisation Batch Size</h3><p>需要从一下两点考虑来选择合适的<code>ha-sync-batch-size</code>：</p>
+<ol>
+<li>队列平均的消息大小，该值与<code>ha-sync-batch-size</code>的乘积会影响到网络带宽。</li>
+<li><code>ha-sync-batch-size</code>设置太大，会导致集群中的节点与<code>net_ticktime</code>的设置相悖。集群中的节点通过传输层进行一一相连，周期性地在节点间交换<code>tick</code>消息来保持节点间的连接并用于检测连接是否断开。这<code>tick</code>消息发送的频率就由<code>net_ticktime</code>来控制。</li>
+</ol>
+<p>一般情况下，在一个<em>net_ticktime</em>周期内节点间会发送4条<em>tick</em>消息，如果在net_ticktime(±25%)档期内无<em>tick</em>消息交换，则该节点会被认定为宕机，将会从集群中移除。在集群节点增大<em>net_ticktime</em>的值，可以让集群适应网络延迟高的网络环境，但会导致集群需要花更长的时间来检查到挂掉的节点；同样的道理，减小该值，会缩短检查节点故障的时间，但是会加大集群在网络延迟高时不能正常工作的风险。因此，需要谨慎考虑后再对该值进行调整。</p>
+<p>举个例子，如果设置<em>ha-sync-batch-size</em>为50000，并且队列中消息的平均大小为1k，则节点间每次同步流量为50M，所以必须保证镜像队列节点间的网络连接能够承受这种考验；如果节点间同步时传输的时间大于<em>net_ticktime</em>，则集群中的节点会认为他们在不同的网络分区。</p>
+<h3 id="关闭节点">关闭节点</h3><p>如果关闭一个包含镜像队列master的节点，则其他节点上该镜像队列的slave会升级成为master。如果继续关闭其他节点，会进入一种场景：该镜像队列没有其他的slave节点了，该镜像队列只存在于当前正在关闭的节点上。如果该队列被声明为<em>durable</em>的，则最后的master节点关闭后，重启该节点，所有被持久化的消息可以被恢复；再重启其他节点，如果也是加入来该镜像队列，则这些节点会重新为该队列创建镜像。</p>
+<p>由于节点以slave的方式重新加入集群时无法知道它所持久化的消息是否跟master节点一致，因此，在加入镜像队列时，slave节点会清空本地存储的关于该队列的所有消息，重新从master同步消息。</p>
+<h3 id="关闭master节点（slave未同步）">关闭master节点（slave未同步）</h3><p>在slave节点未同步的情况下关闭master节点，最常见的例子就是集群升级。当正常关闭master节点（关闭服务，关闭OS）RabbitMQ默认会拒绝切换到不同步的slave节点来保证不丢失消息，因此会将队列关闭而停止服务（包括其他非同步的slave节点）。但是在非正常关闭（节点崩溃，断电），非受控的master关闭会导致切换到非同步的slave节点。</p>
+<p>如果需要在任何情况下支持master切换到非同步的slave节点，则需要将<code>ha-promote-on-shutdown</code>从默认值<code>when-synced</code>修改为<code>always</code>。在此设置下可以提高可用性而可能会导致消息丢失。</p>
+<h3 id="丢失master（slave都已关闭）">丢失master（slave都已关闭）</h3><p>在正常情况下，最后关闭的节点会成为master，重启该节点后，它仍是master。但是如果在关闭时他的master信息丢失，则重启时就不会有master，导致该节点会议slave的方式（清空消息）加入集群，而导致消息丢失。因此需要<code>rabbitmqctl forget_cluster_node</code>，让RabbitMQ将最后关闭的slave提升为新的master，如果该slave意见同步，则不会存在消息丢失；如果该slave未同步，则会存在消息丢失的风险。</p>
+<h2 id="镜像队列的实现及含义">镜像队列的实现及含义</h2><p>对于所有镜像队列存在一个master和多个slave存在于不同的节点上。除了<code>publish</code>以为的所有操作都在master上进行，然后有master将操作结果广播给slave，客户端从slave消费消息最终都是从master消费。当slave操作失败，客户端程序不需要被通知也不需要进行任何操作。slave的出错，可能不回被立即发现，而通过连接的流程控制可能会导致消息<em>publish</em>的延迟。当master出错，则某一个slave需要被晋升为master，在此刻，一下事情会发生：</p>
+<ol>
+<li>某个slave被晋升为新的master，晋升的游戏规则为选取资格最老的节点，因为最老的节点有最好的机会与master同步。如果没有slave与master同步，则只存在于master节点上的消息会丢失。</li>
+<li>slave会认为所有之前的消费者都粗暴地断开连接。因此，会<em>requeue</em>所有被发送到客户端等待回执的消息，这当中也包括客户端已经发送回执的消息，丢失的原因包括在到达master的过程中被丢失，或者master发送广播给slave时丢失，不管哪种原因，新的master别无他法只能认定消息没有回执，而重新将这些消息放入队列。</li>
+<li>客户端的请求会被取消。</li>
+<li>由于<em>requeue</em>，客户端会再次收到之前收到过的消息。</li>
+</ol>
+<p>当被选中的slave晋升为master之际，由于发布到镜像队列的消息是直接发送到master或者slave上的，因此在此变迁期间，发布的消息不会被丢失。因此，就算master出错，消息可以继续发布到slave节点，当新的master晋升完成后，会将消息同步到其他slave节点上。</p>
+<p>同样地，在发布者发布消息和发布者确认发布成功的过程中，就算是master活着slave出错使用发布者确认（publisher confirm）方式发布的消息也不回丢失。从这个角度来说，发布消息到镜像队列跟发布消息到普通队列没有两样。</p>
+<p>如果使用<em>noAck=true</em>（客户端不回发送回执）的方式从镜像队列中消费消息，则消息可能会丢失。当消息已发送出去RabbitMQ就认为已经收到回执，此时如果客户端粗暴地断开连接，则该消息可能就会丢失。在镜像节点的情况下，情况也是如此。因此如果要保证消息不丢失，需要使用<em>noAck=false</em>。</p>
+<h3 id="发布者确认和事务">发布者确认和事务</h3><p>镜像队列同样支持发布者确认和事务。从事务的角度来看，只有当事务被集群中所有节点上完成时 <strong><em>tx.commit-ok</em></strong> 才会返回给客户端。同样地，只有当消息被所有节点接受后才会被确认为发布成功。</p>
+<h3 id="流程控制">流程控制</h3><p>RabbitMQ使用 <em>credit-based</em> 算法来限制消息发布。发布者收到所有镜像的credit后才被允许发布消息。slave生产credit出错，会导致发布者等待，发布者会持续等待知道所有的slave都生产credit，或等到其他的slave认为此slave已经从集群中断开连接了。因此 <em>net_ticktime</em> 的设置至关重要。</p>
+</div><div class="tags"><a href="/tags/分布式/">分布式</a></div><div class="post-nav"><a href="/2015/12/23/rabbitmq-cluster/" class="next">RabbitMQ集群<i class="icon-next"></i></a></div></div></div></div><div class="pure-u-1-4"><div id="sidebar"><div class="widget"><form action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank" class="search-form"><input type="text" name="q" maxlength="20" placeholder="Search" class="search-form-input"/><input type="hidden" name="sitesearch" value="http://forestz.cn"/></form></div><div class="widget"><div class="widget-title">分类</div><ul class="category-list"><li class="category-list-item"><a class="category-list-link" href="/categories/RabbitMQ/">RabbitMQ</a></li></ul></div><div class="widget"><div class="widget-title">标签</div><div class="tagcloud"><a href="/tags/分布式/" style="font-size: 15px;">分布式</a></div></div><div class="widget"><div class="widget-title">最新文章</div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2015/12/31/rabbit-ha/">RabbitMQ HA</a></li><li class="post-list-item"><a class="post-list-link" href="/2015/12/23/rabbitmq-cluster/">RabbitMQ集群</a></li></ul></div><div class="widget"><div class="widget-title">友情链接</div><ul></ul><a href="https://github.com/tufu9441/maupassant-hexo" title="Hexo简洁主题推荐" target="_blank">Hexo简洁主题推荐</a></div></div></div></div><div id="footer">© <a href="/" rel="nofollow">宝石乡人.</a></div><a id="rocket" href="#top" class="show"></a><script src="/js/jquery.min.js" type="text/javascript"></script>
+<script src="/js/totop.js" type="text/javascript"></script></div></body></html>
